@@ -1,0 +1,12 @@
+void mini_main() {
+  int total = 0;
+  int i = 5;
+  for (; i<10; i=i+1) {
+    print i*i;
+    total = total + i;
+    continue;
+    break;
+  }
+  print total;
+}
+

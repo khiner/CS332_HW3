@@ -1,0 +1,898 @@
+Karl Hiner
+CS322 HW 3
+
+Question 1 - Extending source code to produce code for "for" loops:
+-------------------------------------------------------------------
+
+The strategy we will use to generate code for a "for" loop will be to work
+from the top down, implementing code generation in the 'For.java' class, 
+relying on the base class implementations of the 'compile' methods for the
+loop's components (test, init, step, body).
+
+We will base our 'compile' method on the already implemented from 'While.java', 
+which is shown in full below.
+
+
+While.java:compile
+-------------------------------------------------------------------
+    public void compile(Assembly a, int pushed) {
+        String lab1 = a.newLabel();
+        String lab2 = a.newLabel();
+        a.emit("jmp", lab2);
+        a.emitLabel(lab1);
+        body.compile(a, pushed);
+        a.emitLabel(lab2);
+        test.branchTrue(a, pushed, 0, lab1);
+    }
+-------------------------------------------------------------------
+
+
+For loops are only different from while loops in that they have an
+'init' expression and a 'step' expression, as well as a test. 
+
+The 'init' expression must be executed _only once_, _before_ the test and body, 
+and the 'step' expression must be executed during each loop, _after_ the test 
+and body.
+
+Thus, we only have to add four lines to turn the 'compile' for 'while' loops
+into a 'compile' for 'for' loops:
+
+
+For.java:compile
+-------------------------------------------------------------------
+    public void compile(Assembly a, int pushed) {
+	String lab1 = a.newLabel(); // body label
+	String lab2 = a.newLabel(); // test label
+	
+	init.compile(a, pushed); // NEW LINE: compile init expr
+	a.emit("jmp", lab2);
+	a.emitLabel(lab1);
+	body.compile(a, pushed);
+	if (step != null) {
+	    step.compileExpr(a, pushed, 0); // NEW LINE: compile step expr
+	}
+	a.emitLabel(lab2);
+	test.branchTrue(a, pushed, 0, lab1);
+    }
+-------------------------------------------------------------------
+
+The only four new lines were:
+
+	init.compile(a, pushed); // NEW LINE: compile init expr
+
+which is the _first_ generated line, and
+
+	if (step != null) {
+	    step.compileExpr(a, pushed, 0); // NEW LINE: compile step expr
+	}
+
+which is generated directly after the body.  (This null-check for step
+is a bit of a hack.  A cleaner solution would be to provide an EmptyExpr
+class, and to detect an empty expr in the parser.  For the purposes of this
+assignment, I didn't want to change the abstract syntax.)
+
+Also note that register 0 is used for both the step AND test expressions,
+since their results are not used. (Also note that no spilling is necessary, 
+since no expression's result is used by any other expression.)
+
+There is a problem here, though - remember that we are working from the 
+top down.  In order for the the above generation to work for arbitrary 
+'init' expressions (remember that they can be variable declarations,
+arbitrary expressions, or even empty), we need to _also_ modify the 
+all classes extending 'ForInit.java'.
+
+The easiest case is when there is _no_ expression at all in the expression
+(when 'init' is empty, as in for( ;test;step)).  In this case, we don't
+need to generate any code at all!
+
+
+NoInit.java:compile
+-------------------------------------------------------------------
+    public void compile(Assembly a, int pushed) {
+	// No code is generated for empty 'for' loop initializers.
+    }
+-------------------------------------------------------------------
+
+
+Next, we handle when 'init' is an expression.  In this case, we simply
+compile the expression (leaving the result in register 0, since it
+will not be used).
+
+ExprInit.java:compile
+-------------------------------------------------------------------
+    public void compile(Assembly a, int pushed) {
+	expr.compileExpr(a, pushed, 0);
+    }
+-------------------------------------------------------------------
+
+Finally, we handle variable declarations in 'init'.  Again, this is
+a simple matter of compiling the VarDecl instance.
+
+VarDeclInit.java:compile
+-------------------------------------------------------------------
+    public void compile(Assembly a, int pushed) {
+	decl.compileExpr(a, pushed, 0);
+    }
+-------------------------------------------------------------------
+
+
+That is all.  We are now ready to test our changes.  To test "for" loops,
+we will take advantage of the fact that we are emulating Java's "for" syntax,
+and write equivalent programs in Java that use the same init, test and step
+expressions, and print exactly what the equivalent Mini program prints
+(with a "print: ..." prefix, to match Mini's print output).  Then we can
+compare the output of both programs, using Unix's build-in 'diff', expecting
+no output (meaning no difference).
+
+The following script takes two arguments - a directory and file prefix - and 
+does exactly that, with some compilation, checking and cleanup.
+
+
+test.sh (script for testing the output of two (hopefully!) equivalent programs, 
+usage: ./test.sh ${test_dir} ${file_prefix}
+This script expects a ${file_prefix}.mini and ${file_prefix}.java to be in ${test_dir}.
+-------------------------------------------------------------------
+#!/bin/bash
+
+# redirect compilation errors to temp file
+javac compiler/*.java mini/*.java $1$2.java 2> $1java_error
+ERROR=$(<$1java_error)
+
+# cleanup temp error file
+rm $1java_error
+
+# check for Java compilation failures
+if [ ! -z "$ERROR" ]; then
+    echo $ERROR
+    echo "Errors during Java compilation! Exiting test."
+    exit
+fi
+
+# compile and display result
+echo "Compiling $1$2.mini to $1$2.s"
+COMP=$(java mini.Compiler $1$2.mini $1$2.s)
+echo $COMP
+
+# check for failures
+if [ "$COMP" != "Total failures found: 0" ]; then
+    echo "Errors during Mini compilation! Exiting test."
+    exit
+fi
+
+gcc -m32 -o $1$2-mini $1$2.s runtime.c
+cd $1
+java $2 > $2-expected.out
+./$2-mini > $2-actual.out
+echo "Comparing output of $2.java and $2.mini"
+DIFF=$(diff $2-expected.out $2-actual.out)
+if [ -z "$DIFF" ]; then
+    echo "Test Passed!"
+else
+    echo "Diff:"
+    echo $DIFF
+fi
+
+#cleanup
+rm $2.class $2.s $2-mini
+-------------------------------------------------------------------
+
+
+Example test files:
+
+
+for1.mini
+-------------------------------------------------------------------
+void mini_main() {
+  int total = 0;
+  for (int i=0; i<10; i=i+1) {
+    print i*i;
+    total = total + i;
+  }
+  print total;
+}
+-------------------------------------------------------------------
+
+
+for1.java
+-------------------------------------------------------------------
+class for1 {
+    static void print(int i) {
+	System.out.println("print: " + i);
+    }
+
+    public static void main(String[] args) {
+	int total = 0;
+	for (int i = 0; i < 10; i = i + 1) {
+	    print(i * i);
+	    total = total + i;
+	}
+	print(total);
+    }
+}
+-------------------------------------------------------------------
+
+
+testing for1:
+-------------------------------------------------------------------
+$ ./test.sh ForTests/ for1
+Compiling ForTests/for1.mini to ForTests/for1.s
+Total failures found: 0
+Comparing output of for1.java and for1.mini
+Test Passed!
+$ cat ForTests/for1-actual.out 
+print: 0
+print: 1
+print: 4
+print: 9
+print: 16
+print: 25
+print: 36
+print: 49
+print: 64
+print: 81
+print: 45
+$ cat ForTests/for1-expected.out 
+print: 0
+print: 1
+print: 4
+print: 9
+print: 16
+print: 25
+print: 36
+print: 49
+print: 64
+print: 81
+print: 45
+-------------------------------------------------------------------
+
+
+for2.mini (empty init):
+-------------------------------------------------------------------
+void mini_main() {
+  int total = 0;
+  int i = 5;
+  for (; i<10; i=i+1) {
+    print i*i;
+    total = total + i;
+  }
+  print total;
+}
+-------------------------------------------------------------------
+
+
+for2.java:
+-------------------------------------------------------------------
+class for2 {
+    static void print(int i) {
+	System.out.println("print: " + i);
+    }
+
+    public static void main(String[] args) {
+	int total = 5;
+	int i = 0;
+	for (; i < 10; i = i + 1) {
+	    print(i * i);
+	    total = total + i;
+	}
+	print(total);
+    }
+}
+-------------------------------------------------------------------
+
+
+testing for2:
+-------------------------------------------------------------------
+$ ./test.sh ForTests/ for2
+Compiling ForTests/for2.mini to ForTests/for2.s
+Total failures found: 0
+Comparing output of for2.java and for2.mini
+Test Passed!
+$ cat ForTests/for2-actual.out 
+print: 25
+print: 36
+print: 49
+print: 64
+print: 81
+print: 35
+$ cat ForTests/for2-expected.out 
+print: 25
+print: 36
+print: 49
+print: 64
+print: 81
+print: 35
+-------------------------------------------------------------------
+
+
+for3.mini (empty step expr):
+-------------------------------------------------------------------
+void mini_main() {
+  int total = 0;
+  int i = 0;
+  for (; i<10;) {
+    print i*i;
+    total = total + i;
+    i = i + 2;
+  }
+  print total;
+}
+-------------------------------------------------------------------
+
+
+for3.java:
+-------------------------------------------------------------------
+class for3 {
+    static void print(int i) {
+	System.out.println("print: " + i);
+    }
+
+    public static void main(String[] args) {
+	int total = 0;
+	int i = 0;
+	for (; i < 10;) {
+	    print(i * i);
+	    total = total + i;
+	    i = i + 2;
+	}
+	print(total);
+    }
+}
+-------------------------------------------------------------------
+
+
+
+testing for3:
+-------------------------------------------------------------------
+$ ./test.sh ForTests/ for3
+Compiling ForTests/for3.mini to ForTests/for3.s
+Total failures found: 0
+Comparing output of for3.java and for3.mini
+Test Passed!
+$ cat ForTests/for3-actual.out 
+print: 0
+print: 4
+print: 16
+print: 36
+print: 64
+print: 20
+$ cat ForTests/for3-expected.out 
+print: 0
+print: 4
+print: 16
+print: 36
+print: 64
+print: 20
+-------------------------------------------------------------------
+
+
+Question 2 - Implement "break" and "continue" statements:
+-------------------------------------------------------------------
+
+In order to implement 'break' and 'continue' statements, we need to somehow provide knowledge
+of labels to jump to when those statements are encountered.  Since statements already come
+equipped with the knowledge of whether or not they are in a loop (with the boolean 'inLoop'
+argument passed into the 'check' method of the 'Stmt' class), this seemed like an appropriate
+place to insert some more context.
+
+First, I implemented an abstract 'LoopExpr' class, and moved elements common to both 'For' and
+'While' loops up into this class (such as a 'body' and 'test' expr).  I then included some
+'label' attributes, to store the labels for the test, body and (most importantly for the
+'break' statement) a label for the location _directly_ after the loop.
+
+I also moved some common elements of the 'compile' methods of 'For.java' and 'While.java' into
+this new 'LoopStmt' base class (test / end label emission and test branching).
+
+Here is the 'LoopStmt.java' class in its entirity:
+
+
+LoopStmt.java
+-------------------------------------------------------------------
+package mini;
+
+public abstract class LoopStmt extends Stmt {
+    protected Expr    test;
+    protected Stmt    body;
+
+    protected String testLabel = null;
+    protected String bodyLabel = null;
+    protected String endLabel = null;
+
+    /** loop statements extending this class must emit / jump to body label,
+     *  as well as any other details specific to the implementation
+     */
+    protected abstract void compileInner(Assembly a, int pushed);
+
+    /*
+     * Returns the label that should be jumped to on a 'continue' statement.
+     * This label will be different for different loops.
+     */
+    public abstract String getContinueLabel();
+
+    /*
+     * Returns the label leading right into the body of this loop
+     */
+    public String getBodyLabel() {
+	return bodyLabel;
+    }
+
+    /*
+     * Returns the label directly after this label.  Used for the 'break' statement
+     */
+    public String getEndLabel() {
+	return endLabel;
+    }
+
+    /** test / end label emission and test branching are handled.
+     */
+    public void compile(Assembly a, int pushed) {
+	initLabels(a);
+	compileInner(a, pushed);
+	a.emitLabel(testLabel);
+	test.branchTrue(a, pushed, 0, bodyLabel);
+	a.emitLabel(endLabel);
+    }
+
+    protected void initLabels(Assembly a) {
+	testLabel = a.newLabel();
+	bodyLabel = a.newLabel();
+	endLabel = a.newLabel();
+    }
+}
+-------------------------------------------------------------------
+
+
+However, for continue statements to work appropriately in "for" loops, we must have
+an additional label for the 'step' expression.  This is because skipping directly to
+the test will skip the step, which is incorrect behavior.
+
+Thus, we need to override the following methods in "For.java":
+
+
+For.java:getContinueLabel(), initLabels()
+---------------------------------------------------------------------
+    ...
+
+    private String stepLabel = null;
+
+    ...
+
+    /*
+     * For loops continue to a 'step' expression before going to the test
+     */
+    @Override
+    public String getContinueLabel() {
+	return stepLabel;
+    }
+
+    /** For loops have an additional 'step' expression that needs a label
+     */
+    @Override
+    public void initLabels(Assembly a) {
+	super.initLabels(a);
+	stepLabel = a.newLabel();
+    }
+
+    ...
+-------------------------------------------------------------------
+
+
+For the "while" loop, we can safely jump to the 'test' label when a continue
+statement is encountered:
+
+
+While.java:getContinueLabel()
+-------------------------------------------------------------------
+    public String getContinueLabel() {
+	return testLabel;
+    }
+-------------------------------------------------------------------
+
+
+Now, let's implement the 'compileInner' method required for both "While.java"
+and "For.java" loops.  For While loops, we are only getting rid of lines that
+have been moved to the 'LoopExpr' class.  For "for" loops, we are need to 
+also emit the new 'step' label.
+
+While.java:compileInner()
+-------------------------------------------------------------------
+    /** test / end label emission and test branching are handled in LoopStmt parent class
+     *  All else handled here.
+     */
+    protected void compileInner(Assembly a, int pushed) {
+        a.emit("jmp", testLabel);
+        a.emitLabel(bodyLabel);
+        body.compile(a, pushed);
+    }
+-------------------------------------------------------------------
+
+For.java:compileInner()
+-------------------------------------------------------------------
+    /** test / end label emission and test branching are handled in LoopStmt parent class
+     *  All else handled here.
+     */
+    protected void compileInner(Assembly a, int pushed) {
+	init.compile(a, pushed);
+	a.emit("jmp", testLabel);
+	a.emitLabel(bodyLabel);
+	body.compile(a, pushed);
+	a.emitLabel(stepLabel);  // emit new 'step' label
+	if (step != null) {
+	    step.compileExpr(a, pushed, 0);
+	}
+    }
+-------------------------------------------------------------------
+
+
+Next, we replace the 'check' method in Stmt.java to use a parent-loop reference
+instead of a simple flag:
+
+Stmt.java:check
+-------------------------------------------------------------------
+...
+
+    /** Check that this statement is valid, taking the current environment
+     *  as an argument and returning a possibly modified environment as a
+     *  result.
+     */
+    public abstract VarEnv check(Fundef def, Context ctxt, LoopStmt parentLoop, VarEnv env)
+      throws Failure;
+
+...
+-------------------------------------------------------------------
+
+
+Of course, we also need to update every class that extends 'Stmt' to reflect
+this change.  We use null arguments everywhere where 'inLoop' was being set to 'false',
+and of course, in loops, we use 'this':
+
+
+While.java:check
+-------------------------------------------------------------------
+...
+
+    public VarEnv check(Fundef def, Context ctxt, LoopStmt parentLoop, VarEnv env)
+      throws Failure {
+
+      	...
+
+        // check body, but discard any modified environment that it produces.
+        body.check(def, ctxt, this, env);
+
+	...
+
+    }
+...
+-------------------------------------------------------------------
+
+
+an identical change is made to 'For.java'.
+
+
+Finally, we arrive at the actual Continue and Break implementations.  We add a 
+parentLoop attribute to both classes, and instantiate them in the 'check' method.
+
+
+While.java:check
+-------------------------------------------------------------------
+    /** Check that this statement is valid, taking the current environment
+     *  as an argument and returning a possibly modified environment as a
+     *  result.
+     */
+    public VarEnv check(Fundef def, Context ctxt, LoopStmt parentLoop, VarEnv env)
+      throws Failure {
+        if (parentLoop == null) {
+            ctxt.report(new Failure("break can only be used in a loop"));
+        }
+	this.parentLoop = parentLoop;
+        def.returns = false;
+        return env; // Return the input environment unchanged.
+    }
+-------------------------------------------------------------------
+
+
+again, an identical change is made to the 'Continue' class.  (We could create yet
+another super class to encapsulate these similarities if we wanted.)
+
+Finally, we can implement the 'compile' methods of the Break and Continue statements.
+At this point, this is simply a matter of emitting unconditional jumps to the 
+appropriate parent labels.
+
+
+Break.java:compile
+-------------------------------------------------------------------
+    /** Generate code for executing this statement.
+     */
+    public void compile(Assembly a, int pushed) {
+	if (parentLoop != null) {
+	    // unconditionally jump to the end of parent-loop (if we are in a loop)
+	    a.emit("jmp", parentLoop.getEndLabel());
+	}
+    }
+-------------------------------------------------------------------
+
+
+Continue.java:compile
+-------------------------------------------------------------------
+    /** Generate code for executing this statement.
+     */
+    public void compile(Assembly a, int pushed) {
+	if (parentLoop != null) {
+	    // unconditionally jump to the parent-loop's test (if we are in a loop)
+	    a.emit("jmp", parentLoop.getContinueLabel());
+	}
+    }
+-------------------------------------------------------------------
+
+
+And we are done!  Let's test to make sure we've got it.  Just as in
+Question 1, we will test our solution by making equivalent Java and
+Mini programs, and comparing their output using the test script above.
+
+There are two test cases each for "continue" and "break" statements.
+One test for each using both "while" and "for" loops.
+
+
+cont1.java:
+-------------------------------------------------------------------
+class cont1 {
+    static void print(int i) {
+	System.out.println("print: " + i);
+    }
+
+    public static void main(String[] args) {
+	int total = 0;
+	int i = 0;
+	while (i < 10) {
+	    i = i + 2;
+	    print(i * i);
+	    total = total + i;
+	    continue;
+	}
+	print(total);
+    }
+}
+-------------------------------------------------------------------
+
+
+cont1.mini:
+-------------------------------------------------------------------
+void mini_main() {
+  int total = 0;
+  int i = 0;
+  while (i < 10) {
+    i = i + 2;
+    print i*i;
+    total = total + i;
+    continue;
+  }
+  print total;
+}
+-------------------------------------------------------------------
+
+
+
+testing cont1:
+-------------------------------------------------------------------
+$ ./test.sh ContinueTests/ cont1
+Compiling ContinueTests/cont1.mini to ContinueTests/cont1.s
+Total failures found: 0
+Comparing output of cont1.java and cont1.mini
+Test Passed!
+$ cat ContinueTests/cont1-actual.out 
+print: 4
+print: 16
+print: 36
+print: 64
+print: 100
+print: 30
+$ cat ContinueTests/cont1-expected.out 
+print: 4
+print: 16
+print: 36
+print: 64
+print: 100
+print: 3
+-------------------------------------------------------------------
+
+
+cont2.java:
+-------------------------------------------------------------------
+class cont2 {
+    static void print(int i) {
+	System.out.println("print: " + i);
+    }
+
+    public static void main(String[] args) {
+	int total = 0;
+	for (int i = 0; i < 10; i = i + 1) {
+	    print(i * i);
+	    total = total + i;
+	    continue;
+	}
+	print(total);
+    }
+}
+-------------------------------------------------------------------
+
+
+cont2.mini:
+-------------------------------------------------------------------
+void mini_main() {
+  int total = 0;
+  for (int i = 0; i < 10; i = i + 1) {
+    print i*i;
+    total = total + i;
+    continue;
+  }
+  print total;
+}
+-------------------------------------------------------------------
+
+
+testing cont2
+-------------------------------------------------------------------
+$ ./test.sh ContinueTests/ cont2
+Compiling ContinueTests/cont2.mini to ContinueTests/cont2.s
+Total failures found: 0
+Comparing output of cont2.java and cont2.mini
+Test Passed!
+$ cat ContinueTests/cont2-actual.out 
+print: 0
+print: 1
+print: 4
+print: 9
+print: 16
+print: 25
+print: 36
+print: 49
+print: 64
+print: 81
+print: 45
+$ cat ContinueTests/cont2-expected.out 
+print: 0
+print: 1
+print: 4
+print: 9
+print: 16
+print: 25
+print: 36
+print: 49
+print: 64
+print: 81
+print: 45
+-------------------------------------------------------------------
+
+
+
+break1.java
+-------------------------------------------------------------------
+class break1 {
+    static void print(int i) {
+	System.out.println("print: " + i);
+    }
+
+    public static void main(String[] args) {
+	int total = 0;
+	int i = 0;
+	while (i < 10) {
+	    i = i + 2;
+	    if (i == 6) {
+		break;
+	    }
+	    print(i * i);
+	    total = total + i;
+	}
+	print(total);
+    }
+}
+-------------------------------------------------------------------
+
+
+break1.mini
+-------------------------------------------------------------------
+void mini_main() {
+  int total = 0;
+  int i = 0;
+  while (i < 10) {
+    i = i + 2;
+    if (i == 6) {
+        break;
+    }
+    print i*i;
+    total = total + i;
+  }
+  print total;
+}
+-------------------------------------------------------------------
+
+
+
+testing break1
+-------------------------------------------------------------------
+$ ./test.sh BreakTests/ break1
+Compiling BreakTests/break1.mini to BreakTests/break1.s
+Total failures found: 0
+Comparing output of break1.java and break1.mini
+Test Passed!
+$ cat BreakTests/break1-actual.out 
+print: 4
+print: 16
+print: 6
+$ cat BreakTests/break1-expected.out 
+print: 4
+print: 16
+print: 6
+-------------------------------------------------------------------
+
+
+break2.java
+-------------------------------------------------------------------
+class break2 {
+    static void print(int i) {
+	System.out.println("print: " + i);
+    }
+
+    public static void main(String[] args) {
+	int total = 0;
+	int i = 0;
+	for (;i < 10;i = i + 1) {
+	    if (i == 6) {
+		break;
+	    }
+	    print(i * i);
+	    total = total + i;
+	}
+	print(total);
+    }
+}
+-------------------------------------------------------------------
+
+
+break2.mini
+-------------------------------------------------------------------
+void mini_main() {
+  int total = 0;
+  int i = 0;
+  for (;i < 10;i = i + 1) {
+    if (i == 6) {
+        break;
+    }
+    print i*i;
+    total = total + i;
+  }
+  print total;
+}
+-------------------------------------------------------------------
+
+
+
+testing
+-------------------------------------------------------------------
+$ ./test.sh BreakTests/ break2
+Compiling BreakTests/break2.mini to BreakTests/break2.s
+Total failures found: 0
+Comparing output of break2.java and break2.mini
+Test Passed!
+$ cat BreakTests/break2-actual.out 
+print: 0
+print: 1
+print: 4
+print: 9
+print: 16
+print: 25
+print: 15
+$ cat BreakTests/break2-expected.out 
+print: 0
+print: 1
+print: 4
+print: 9
+print: 16
+print: 25
+print: 15
+-------------------------------------------------------------------
+
+
+
+Question 3 - Support passing of parameters by reference:
+-------------------------------------------------------------------
+

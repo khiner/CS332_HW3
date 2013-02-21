@@ -1,0 +1,44 @@
+package mini;
+
+import compiler.*;
+import compiler.Failure;
+
+/** Abstract syntax for while statements.
+ */
+class While extends LoopStmt {
+
+    While(Expr test, Stmt body) {
+        this.test = test;
+        this.body = body;
+    }
+
+    /** Check that this statement is valid, taking the current environment
+     *  as an argument and returning a possibly modified environment as a
+     *  result.
+     */
+    public VarEnv check(Fundef def, Context ctxt, LoopStmt parentLoop, VarEnv env)
+      throws Failure {
+        try {
+            if (!test.typeOf(ctxt, env).equal(Type.BOOLEAN)) {
+               ctxt.report(new Failure("Boolean test expected in while loop"));
+            }
+        } catch (Failure f) {
+            // report any error that occured while checking the expression.
+            ctxt.report(f);
+        }
+
+        // check body, but discard any modified environment that it produces.
+        body.check(def, ctxt, this, env);
+        def.returns = false;
+        return env;
+    }
+
+    /** Labels, test / end label emission and test branching are handled in LoopStmt parent class
+     *  All else handled here.
+     */
+    protected void compileInner(Assembly a, int pushed) {
+        a.emit("jmp", testLabel);
+        a.emitLabel(bodyLabel);
+        body.compile(a, pushed);
+    }
+}

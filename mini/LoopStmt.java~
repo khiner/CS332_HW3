@@ -1,0 +1,47 @@
+package mini;
+
+public abstract class LoopStmt extends Stmt {
+    protected Expr    test;
+    protected Stmt    body;
+
+    protected String testLabel = null;
+    protected String bodyLabel = null;
+    protected String endLabel = null;
+
+    protected abstract void compileInner(Assembly a, int pushed);
+
+    public void compile(Assembly a, int pushed) {
+	initLabels(a);
+	compileInner(a, pushed);
+	a.emitLabel(testLabel);
+	test.branchTrue(a, pushed, 0, bodyLabel);
+	a.emitLabel(endLabel);
+    }
+
+    /*
+     * Returns the label that should be jumped to on a 'continue' statement
+     */
+    public String getContinueLabel() {
+	return testLabel;
+    }
+
+    /*
+     * Returns the label leading right into the body of this loop
+     */
+    public String getBodyLabel() {
+	return bodyLabel;
+    }
+
+    /*
+     * Returns the label directly after this label.  Used for the 'break' statement
+     */
+    public String getEndLabel() {
+	return endLabel;
+    }
+
+    protected void initLabels(Assembly a) {
+	testLabel = a.newLabel();
+	bodyLabel = a.newLabel();
+	endLabel = a.newLabel();
+    }
+}
